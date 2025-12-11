@@ -91,47 +91,40 @@ async def nasa_apod(date: Optional[str] = None) -> Dict[str, Any]:
 
 
 @mcp.tool()
-async def nasa_mars_rover_photos(
-    rover: str,
-    earth_date: str,
-    camera: Optional[str] = None,
-    limit: int = 10,
+async def nasa_donki_recent_events(
+    event_type: str = "FLR",
+    days: int = 3,
+    limit: int = 20,
 ) -> Dict[str, Any]:
     """
-NASA Mars Rover Photos — фотографии марсоходов по земной дате.
+NASA DONKI — недавние события космической погоды (Solar Flares, CME, бури).
 
 Назначение:
-Классический учебный инструмент для демонстрации работы агента с реальными
-изображениями и фильтрами. Отлично подходит для сравнений разных камер и дат.
+Инструмент для сводок по космической погоде: вспышки на Солнце, корональные
+выбросы массы, геомагнитные бури. Хорошо работает в сочетании с APOD и NeoWs.
 
 Параметры:
-- rover: имя марсохода:
-  "curiosity", "opportunity", "spirit".
-- earth_date: земная дата съёмки в формате "YYYY-MM-DD".
-- camera: опционально, фильтр камеры.
-  Примеры распространённых камер:
-  "FHAZ", "RHAZ", "MAST", "CHEMCAM", "NAVCAM", "MAHLI", "MARDI".
-  Если не указана, возвращаются фото всех доступных камер на эту дату.
-- limit: ограничение количества элементов в выдаче (по умолчанию 10).
-
-Поведение:
-- API может вернуть 0 фото на конкретную дату — это нормальный сценарий.
-- При указании камеры, не работавшей в этот день, тоже будет 0 результатов.
+- event_type:
+  - "FLR" — солнечные вспышки (Solar Flares)
+  - "CME" — корональные выбросы массы
+  - "GST" — геомагнитные бури
+  - "ALL" — собрать несколько базовых типов (FLR, CME, GST)
+- days: за сколько последних суток брать события (>=1).
+- limit: максимальное число событий в итоговом списке после сортировки.
 
 Возвращает:
 {
   "ok": true,
-  "rover": "curiosity|opportunity|spirit",
-  "earth_date": "YYYY-MM-DD",
-  "camera": str | null,
-  "count": <сколько фото найдено всего>,
-  "items": [
+  "range": {"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"},
+  "event_types": ["FLR", "CME", ...],
+  "count": int,
+  "events": [
     {
-      "id": int,
-      "camera": str,
-      "img_src": str,
-      "earth_date": "YYYY-MM-DD",
-      "rover_name": str
+      "type": "FLR" | "CME" | "GST" | ...,
+      "id": str | null,
+      "start_time": str | null,
+      "source": str | null,
+      "link": str | null
     }, ...
   ]
 }
@@ -143,43 +136,195 @@ NASA Mars Rover Photos — фотографии марсоходов по зем
 }
 
 Подсказки для агента:
-- Отлично для запросов:
-  "Покажи 5 фото Curiosity за 2018-06-01."
-  "Сравни снимки FHAZ и MAST на одной дате."
-- Если результатов много, достаточно 5–10 для просмотра.
+- Примеры команд:
+  "Что по космической погоде за последние 3 дня?"
+  "Есть ли сильные солнечные вспышки за неделю?"
 """
     try:
-        rover = rover.strip().lower()
-        params = {"earth_date": earth_date, "api_key": _key()}
-        if camera:
-            params["camera"] = camera
+        from datetime import date, timedelta
 
-        data = await _get(
-            f"https://api.nasa.gov/mars-photos/api/v1/rovers/{rover}/photos",
-            params,
-        )
-        photos = data.get("photos") or []
-        items = [
-            {
-                "id": p.get("id"),
-                "camera": (p.get("camera") or {}).get("name"),
-                "img_src": p.get("img_src"),
-                "earth_date": p.get("earth_date"),
-                "rover_name": (p.get("rover") or {}).get("name"),
+        days = max(int(days), 1)
+        limit = max(int(limit), 1)
+
+        end = date.today()
+        start = end - timedelta(days=days)
+        start_str = start.isoformat()
+        end_str = end.isoformat()
+
+        et = (event_type or "FLR").upper()
+        if et == "ALL":
+            types: List[str] = ["FLR", "CME", "GST"]
+        else:
+            types = [et]
+
+        events: List[Dict[str, Any]] = []
+
+        for t in types:
+            params = {
+                "startDate": start_str,
+                "endDate": end_str,
+                "api_key": _key(),
             }
-            for p in photos[: max(1, limit)]
-        ]
+            data = await _get(f"https://api.nasa.gov/DONKI/{t}", params)
+            if not isinstance(data, list):
+                continue
+
+            for raw in data:
+                event_id = (
+                    raw.get("flrID")
+                    or raw.get("gstID")
+                    or raw.get("cmeID")
+                    or raw.get("activityID")
+                    or raw.get("eventID")
+                )
+                start_time = (
+                    raw.get("beginTime")
+                    or raw.get("startTime")
+                    or raw.get("timeStart")
+                    or raw.get("timeTag")
+                )
+                source = (
+                    raw.get("sourceLocation")
+                    or raw.get("location")
+                    or raw.get("source")
+                )
+                link = raw.get("link") or raw.get("url")
+
+                events.append(
+                    {
+                        "type": t,
+                        "id": event_id,
+                        "start_time": start_time,
+                        "source": source,
+                        "link": link,
+                    }
+                )
+
+        events_sorted = sorted(
+            events,
+            key=lambda e: e.get("start_time") or "",
+            reverse=True,
+        )
+
+        events_limited = events_sorted[:limit]
 
         return {
             "ok": True,
-            "rover": rover,
-            "earth_date": earth_date,
-            "camera": camera,
-            "count": len(photos),
+            "range": {"start_date": start_str, "end_date": end_str},
+            "event_types": types,
+            "count": len(events_limited),
+            "events": events_limited,
+        }
+    except Exception as e:
+        return _err(e)
+
+
+@mcp.tool()
+async def nasa_media_search(
+    query: str,
+    media_type: str = "image",
+    year_start: Optional[int] = None,
+    year_end: Optional[int] = None,
+    page: int = 1,
+) -> Dict[str, Any]:
+    """
+NASA Image and Video Library — поиск изображений/видео/аудио.
+
+Назначение:
+Инструмент для “подборки картинок”: агент может искать фото/видео NASA по теме
+(Марс, запуск ракет, МКС, галактики и т.п.), а затем выдавать ссылки/превью.
+
+Параметры:
+- query: строка поиска (ключевые слова, на англ. обычно лучше).
+- media_type: "image", "video", "audio" или комбинация через запятую
+  (например, "image,video").
+- year_start: опциональный нижний предел года (int).
+- year_end: опциональный верхний предел года (int).
+- page: номер страницы результатов (>=1).
+
+Возвращает:
+{
+  "ok": true,
+  "query": str,
+  "media_type": str,
+  "page": int,
+  "count": int,
+  "items": [
+    {
+      "nasa_id": str,
+      "title": str,
+      "media_type": "image" | "video" | "audio",
+      "date_created": str | null,
+      "description": str | null,
+      "preview": str | null  # URL превью-изображения
+    }, ...
+  ]
+}
+
+Ошибки:
+{
+  "ok": false,
+  "error": "<тип_ошибки>: <сообщение>"
+}
+
+Подсказки для агента:
+- Примеры команд:
+  "Найди 5 картинок с запуском ракеты Saturn V."
+  "Подбери изображения марсианских пейзажей."
+"""
+    try:
+        url = "https://images-api.nasa.gov/search"
+
+        page = max(int(page), 1)
+
+        params: Dict[str, Any] = {
+            "q": query,
+            "media_type": media_type,
+            "page": page,
+        }
+        if year_start is not None:
+            params["year_start"] = int(year_start)
+        if year_end is not None:
+            params["year_end"] = int(year_end)
+
+        data = await _get(url, params)
+        collection = data.get("collection") or {}
+        raw_items = collection.get("items") or []
+
+        items: List[Dict[str, Any]] = []
+        for it in raw_items:
+            data_block = (it.get("data") or [{}])[0]
+            links_block = it.get("links") or []
+
+            preview = None
+            for ln in links_block:
+                href = ln.get("href")
+                if href:
+                    preview = href
+                    break
+
+            items.append(
+                {
+                    "nasa_id": data_block.get("nasa_id"),
+                    "title": data_block.get("title"),
+                    "media_type": data_block.get("media_type"),
+                    "date_created": data_block.get("date_created"),
+                    "description": data_block.get("description"),
+                    "preview": preview,
+                }
+            )
+
+        return {
+            "ok": True,
+            "query": query,
+            "media_type": media_type,
+            "page": page,
+            "count": len(items),
             "items": items,
         }
     except Exception as e:
         return _err(e)
+
 
 
 @mcp.tool()
