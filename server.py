@@ -223,8 +223,8 @@ NASA DONKI — недавние события космической погод
 async def nasa_media_search(
     query: str,
     media_type: str = "image",
-    year_start: Optional[int] = None,
-    year_end: Optional[int] = None,
+    year_start: int = 0,
+    year_end: int = 0,
     page: int = 1,
 ) -> Dict[str, Any]:
     """
@@ -238,8 +238,8 @@ NASA Image and Video Library — поиск изображений/видео/а
 - query: строка поиска (ключевые слова, на англ. обычно лучше).
 - media_type: "image", "video", "audio" или комбинация через запятую
   (например, "image,video").
-- year_start: опциональный нижний предел года (int).
-- year_end: опциональный верхний предел года (int).
+- year_start: год начала (0 = без фильтра).
+- year_end: год конца (0 = без фильтра).
 - page: номер страницы результатов (>=1).
 
 Возвращает:
@@ -282,9 +282,9 @@ NASA Image and Video Library — поиск изображений/видео/а
             "media_type": media_type,
             "page": page,
         }
-        if year_start is not None:
+        if year_start > 0:
             params["year_start"] = int(year_start)
-        if year_end is not None:
+        if year_end > 0:
             params["year_end"] = int(year_end)
 
         data = await _get(url, params)
