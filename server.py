@@ -73,7 +73,7 @@ async def nasa_apod(date: str = "") -> Dict[str, Any]:
   и вывести url."""
     try:
         params = {"api_key": _key()}
-        if date:
+        if date != "":
             params["date"] = date
         data = await _get("https://api.nasa.gov/planetary/apod", params)
 
