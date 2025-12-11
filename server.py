@@ -31,7 +31,7 @@ def _err(e: Exception) -> Dict[str, Any]:
 
 
 @mcp.tool()
-async def nasa_apod(date: Optional[str] = None) -> Dict[str, Any]:
+async def nasa_apod(date: str = "") -> Dict[str, Any]:
     """NASA APOD — Astronomy Picture of the Day (картинка/видео дня).
 
 Назначение:
@@ -40,7 +40,7 @@ async def nasa_apod(date: Optional[str] = None) -> Dict[str, Any]:
 инструментами (марсоходы, астероиды, снимки Земли).
 
 Параметры:
-- date: опционально, дата в формате "YYYY-MM-DD".
+- date: строка 'YYYY-MM-DD'. Если пустая — вернётся текущий APOD от NASA.
   Если не задана, возвращается APOD за текущий день по версии NASA.
 
 Поведение:
