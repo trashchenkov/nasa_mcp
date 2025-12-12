@@ -8,14 +8,91 @@ import httpx
 # Совместимость с разными окружениями FastMCP
 try:
     from fastmcp import FastMCP
+    try:
+        from fastmcp.server.context import request_ctx
+    except ImportError:
+        try:
+            from mcp.server.fastmcp.context import request_ctx
+        except ImportError:
+            request_ctx = None
 except Exception:
     from mcp.server.fastmcp import FastMCP  # type: ignore
+    try:
+        from mcp.server.fastmcp.context import request_ctx
+    except ImportError:
+        request_ctx = None
 
 mcp = FastMCP("nasa-4-tools")
 
 
-def _key() -> str:
-    return os.getenv("NASA_API_KEY", "DEMO_KEY")
+# ==== работа с ключами и правами ====
+
+def _get_user_nasa_key() -> Optional[str]:
+    """
+    Пытаемся достать персональный NASA API key из HTTP-заголовков MCP-запроса.
+    Ключ кладётся клиентом в X-NASA-API-Key (через interceptor).
+    """
+    if request_ctx is None:
+        return None
+    
+    try:
+        ctx = request_ctx.get()
+    except (LookupError, AttributeError, RuntimeError):
+        return None
+    
+    # Пытаемся получить заголовки из контекста
+    headers = None
+    if hasattr(ctx, 'request'):
+        request_obj = getattr(ctx, 'request', None)
+        if request_obj and hasattr(request_obj, 'headers'):
+            headers = request_obj.headers
+    elif hasattr(ctx, 'headers'):
+        headers = ctx.headers
+    
+    if not headers:
+        return None
+    
+    # На всякий случай приводим имена к lower
+    if isinstance(headers, dict):
+        lower = {k.lower(): v for k, v in headers.items()}
+    else:
+        # Если headers - это объект с методами get или __getitem__
+        try:
+            lower = {k.lower(): headers.get(k) or headers[k] for k in headers}
+        except (AttributeError, TypeError):
+            return None
+    
+    key = lower.get("x-nasa-api-key", "").strip()
+    
+    return key if key else None
+
+
+def _get_server_default_key() -> Optional[str]:
+    """
+    Опциональный ключ, захардкоженный на сервере (например, для тестов).
+    НЕ используется для инструментов, которые должны требовать личный ключ.
+    """
+    return os.getenv("NASA_API_KEY") or None
+
+
+def _effective_api_key(require_personal: bool, tool_name: str) -> str:
+    """
+    Возвращает ключ, которым реально пойдём в NASA API,
+    или бросает PermissionError, если доступа быть не должно.
+    """
+    user_key = _get_user_nasa_key()
+    
+    if require_personal:
+        # Жёсткое правило: без персонального ключа этот тул нельзя вызывать
+        if not user_key:
+            raise PermissionError(
+                f"Инструмент {tool_name} доступен только при наличии "
+                f"личного NASA API key. Передайте его вашему агенту."
+            )
+        return user_key
+    
+    # Для "простых" тулов можем падать обратно на серверный ключ или DEMO_KEY
+    return user_key or _get_server_default_key() or "DEMO_KEY"
 
 
 async def _get(url: str, params: Dict[str, Any] | None = None) -> Any:
@@ -72,7 +149,8 @@ async def nasa_apod(date: str = "") -> Dict[str, Any]:
 - Если media_type == "video", стоит сообщить пользователю, что это видео,
   и вывести url."""
     try:
-        params = {"api_key": _key()}
+        api_key = _effective_api_key(require_personal=True, tool_name="nasa_apod")
+        params = {"api_key": api_key}
         if date != "":
             params["date"] = date
         data = await _get("https://api.nasa.gov/planetary/apod", params)
@@ -86,6 +164,9 @@ async def nasa_apod(date: str = "") -> Dict[str, Any]:
             "hdurl": data.get("hdurl"),
             "explanation": data.get("explanation"),
         }
+    except PermissionError as e:
+        # у пользователя нет личного ключа – возвращаем понятную ошибку
+        return {"ok": False, "error": str(e)}
     except Exception as e:
         return _err(e)
 
@@ -141,6 +222,7 @@ NASA DONKI — недавние события космической погод
   "Есть ли сильные солнечные вспышки за неделю?"
 """
     try:
+        api_key = _effective_api_key(require_personal=True, tool_name="nasa_donki_recent_events")
         from datetime import date, timedelta
 
         days = max(int(days), 1)
@@ -163,7 +245,7 @@ NASA DONKI — недавние события космической погод
             params = {
                 "startDate": start_str,
                 "endDate": end_str,
-                "api_key": _key(),
+                "api_key": api_key,
             }
             data = await _get(f"https://api.nasa.gov/DONKI/{t}", params)
             if not isinstance(data, list):
@@ -215,6 +297,8 @@ NASA DONKI — недавние события космической погод
             "count": len(events_limited),
             "events": events_limited,
         }
+    except PermissionError as e:
+        return {"ok": False, "error": str(e)}
     except Exception as e:
         return _err(e)
 
@@ -271,6 +355,7 @@ NASA Image and Video Library — поиск изображений/видео/а
 - Примеры команд:
   "Найди 5 картинок с запуском ракеты Saturn V."
   "Подбери изображения марсианских пейзажей."
+- Этот инструмент не требует NASA API key и доступен всем пользователям.
 """
     try:
         url = "https://images-api.nasa.gov/search"
@@ -388,7 +473,8 @@ NASA NeoWs Feed — околоземные объекты (астероиды) �
 - Для коротких сводок разумно ставить limit=10–20.
 """
     try:
-        params = {"start_date": start_date, "end_date": end_date, "api_key": _key()}
+        api_key = _effective_api_key(require_personal=True, tool_name="nasa_neows_feed")
+        params = {"start_date": start_date, "end_date": end_date, "api_key": api_key}
         data = await _get("https://api.nasa.gov/neo/rest/v1/feed", params)
 
         neo_by_date = data.get("near_earth_objects") or {}
@@ -427,6 +513,8 @@ NASA NeoWs Feed — околоземные объекты (астероиды) �
             "count": len(flat),
             "items": flat[: max(1, limit)],
         }
+    except PermissionError as e:
+        return {"ok": False, "error": str(e)}
     except Exception as e:
         return _err(e)
 
