@@ -4,6 +4,7 @@ import os
 from typing import Optional, Dict, Any, List
 
 import httpx
+from fastmcp.server.dependencies import get_http_headers
 
 # Совместимость с разными окружениями FastMCP
 try:
@@ -27,44 +28,15 @@ mcp = FastMCP("nasa-4-tools")
 
 # ==== работа с ключами и правами ====
 
+
+
 def _get_user_nasa_key() -> Optional[str]:
-    """
-    Пытаемся достать персональный NASA API key из HTTP-заголовков MCP-запроса.
-    Ключ кладётся клиентом в X-NASA-API-Key (через interceptor).
-    """
-    if request_ctx is None:
-        return None
-    
-    try:
-        ctx = request_ctx.get()
-    except (LookupError, AttributeError, RuntimeError):
-        return None
-    
-    # Пытаемся получить заголовки из контекста
-    headers = None
-    if hasattr(ctx, 'request'):
-        request_obj = getattr(ctx, 'request', None)
-        if request_obj and hasattr(request_obj, 'headers'):
-            headers = request_obj.headers
-    elif hasattr(ctx, 'headers'):
-        headers = ctx.headers
-    
-    if not headers:
-        return None
-    
-    # На всякий случай приводим имена к lower
-    if isinstance(headers, dict):
-        lower = {k.lower(): v for k, v in headers.items()}
-    else:
-        # Если headers - это объект с методами get или __getitem__
-        try:
-            lower = {k.lower(): headers.get(k) or headers[k] for k in headers}
-        except (AttributeError, TypeError):
-            return None
-    
-    key = lower.get("x-nasa-api-key", "").strip()
-    
-    return key if key else None
+    headers = get_http_headers()  # {} если не HTTP
+    # подстрахуемся по регистру
+    lower = {k.lower(): v for k, v in headers.items()}
+    key = (lower.get("x-nasa-api-key") or "").strip()
+    return key or None
+
 
 
 def _get_server_default_key() -> Optional[str]:
